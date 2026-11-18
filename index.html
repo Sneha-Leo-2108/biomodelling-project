@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backbone Coordinate Converter</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--card:#f4f5f7;--ac:#2563eb;--bd:#d0d4da}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e8e8e8;--card:#1f2228;--ac:#6ea0ff;--bd:#3a3f48}}
+body{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:820px;margin:0 auto;padding:20px}
+textarea,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:8px}
+textarea{width:100%;box-sizing:border-box;height:170px;font-family:monospace;font-size:13px}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}
+pre{background:var(--card);padding:12px;border-radius:6px;overflow-x:auto;font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.err{color:#d33}
+</style></head><body>
+<h1>Backbone Coordinate Converter</h1>
+<p>Cartesian (PDB) &harr; internal coordinates (&phi;, &psi;, &omega;, carbonyl O). Backbone atoms N, CA, C, O only.</p>
+<div class="row">
+ <select id="mode"><option value="int">PDB &rarr; &phi; &psi; &omega; table</option><option value="cart">&phi; &psi; &omega; table &rarr; PDB</option></select>
+ <select id="preset"><option value="">Preset (for table mode)</option><option>helix</option><option>strand</option><option>ppii</option><option>extended</option></select>
+ <button id="go">Convert</button><button id="dl" hidden>Download PDB</button>
+</div>
+<textarea id="in" placeholder="Paste ATOM lines, or one 'phi psi omega' per line ('-' = blank)"></textarea>
+<p id="msg" class="err"></p><pre id="out"></pre>
+<script>
+const P={helix:[-57,-47,180],strand:[-139,135,180],ppii:[-75,145,180],extended:[180,180,180]};
+const sub=(a,b)=>a.map((x,i)=>x-b[i]),dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],
+mul=(a,s)=>a.map(x=>x*s),unit=a=>mul(a,1/Math.sqrt(dot(a,a))),dist=(a,b)=>Math.sqrt(dot(sub(a,b),sub(a,b))),
+R=Math.PI/180;
+function ang(a,b,c){return Math.acos(Math.max(-1,Math.min(1,dot(unit(sub(a,b)),unit(sub(c,b))))))/R}
+function dih(p0,p1,p2,p3){const b0=sub(p0,p1),b1=unit(sub(p2,p1)),b2=sub(p3,p2),
+v=sub(b0,mul(b1,dot(b0,b1))),w=sub(b2,mul(b1,dot(b2,b1)));return Math.atan2(dot(cross(b1,v),w),dot(v,w))/R}
+function place(a,b,c,L,th,ph){th*=R;ph*=R;const bc=unit(sub(c,b)),n=unit(cross(sub(b,a),bc)),m=cross(n,bc),
+d=[-L*Math.cos(th),L*Math.sin(th)*Math.cos(ph),L*Math.sin(th)*Math.sin(ph)];
+return c.map((x,i)=>x+bc[i]*d[0]+m[i]*d[1]+n[i]*d[2])}
+function build(A){let N=[0,0,0],CA=[1.458,0,0],t=111.2*R,C=[1.458-1.525*Math.cos(t),1.525*Math.sin(t),0],res=[];
+for(let i=0;i<A.length;i++){const[f,s,o]=A[i];
+if(i<A.length-1&&(s==null||o==null))throw Error(`residue ${i+1}: psi and omega required`);
+if(i>0&&f==null)throw Error(`residue ${i+1}: phi required`);
+res.push({N,CA,C,O:place(N,CA,C,1.231,120.5,(s??0)+180)});
+if(i<A.length-1){N=place(N,CA,C,1.329,116.2,s);CA=place(CA,C,N,1.458,121.7,o);C=place(C,N,CA,1.525,111.2,A[i+1][0])}}
+return res}
+function toInternal(r){return r.map((x,i)=>{const nx=r[i+1],pv=r[i-1],
+lk=nx&&dist(x.C,nx.N)<2,pl=pv&&dist(pv.C,x.N)<2;
+return{phi:pl?dih(pv.C,x.N,x.CA,x.C):null,psi:lk?dih(x.N,x.CA,x.C,nx.N):null,omega:lk?dih(x.CA,x.C,nx.N,nx.CA):null,
+co:dist(x.C,x.O),cco:ang(x.CA,x.C,x.O),oD:dih(x.N,x.CA,x.C,x.O)}})}
+function parsePDB(t){const res=[];let cur,key;for(const l of t.split("\n")){if(l.startsWith("ENDMDL"))break;
+if(!l.startsWith("ATOM")||!" A".includes(l[16]))continue;const nm=l.slice(12,16).trim();if(!["N","CA","C","O"].includes(nm))continue;
+const k=l[21]+l.slice(22,27);if(k!==key){cur={};key=k;res.push(cur)}cur[nm]=[+l.slice(30,38),+l.slice(38,46),+l.slice(46,54)]}
+if(!res.length||res.some(r=>Object.keys(r).length<4))throw Error("need N, CA, C, O for every residue in ATOM lines");return res}
+function toPDB(res){let s=1,o=[];res.forEach((r,i)=>["N","CA","C","O"].forEach(n=>{const[x,y,z]=r[n];
+o.push(`ATOM  ${String(s++).padStart(5)} ${n.padEnd(4)} GLY A${String(i+1).padStart(4)}    ${[x,y,z].map(v=>v.toFixed(3).padStart(8)).join("")}  1.00  0.00           ${n[0].padStart(2)}`)}));
+return o.join("\n")+"\nEND\n"}
+const f=v=>v==null?"    --":v.toFixed(2).padStart(7);
+const $=id=>document.getElementById(id);
+$("preset").onchange=()=>{const p=P[$("preset").value];if(p){$("mode").value="cart";$("in").value=Array(10).fill(p.join(" ")).join("\n")}};
+$("go").onclick=()=>{$("msg").textContent="";$("dl").hidden=true;
+try{const t=$("in").value;if($("mode").value=="int"){const d=toInternal(parsePDB(t));
+$("out").textContent=" res    phi     psi   omega    C=O  CA-C-O  N-CA-C-O\n"+d.map((x,i)=>String(i+1).padStart(4)+" "+f(x.phi)+" "+f(x.psi)+" "+f(x.omega)+" "+x.co.toFixed(3).padStart(6)+" "+f(x.cco)+" "+x.oD.toFixed(2).padStart(9)).join("\n")}
+else{const A=t.trim().split("\n").map(l=>{const p=l.replace(/,/g," ").trim().split(/\s+/);return[0,1,2].map(i=>p[i]==null||p[i]=="-"?null:parseFloat(p[i]))});
+const pdb=toPDB(build(A));$("out").textContent=pdb;$("dl").hidden=false;$("dl").onclick=()=>{const a=document.createElement("a");
+a.href=URL.createObjectURL(new Blob([pdb]));a.download="backbone.pdb";a.click()}}}
+catch(e){$("msg").textContent=e.message;$("out").textContent=""}};
+</script></body></html>
