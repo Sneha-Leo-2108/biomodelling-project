@@ -13,4 +13,4 @@ Terminal examples:
     python3 main.py build --preset helix --n 10
 Tests: python3 -m unittest discover -s . -p "test_*.py"
 
-Student: YOUR NAME (YOUR ID)
+Student: SNEHA SRIVASTAVA (2023B1AA0855P)
