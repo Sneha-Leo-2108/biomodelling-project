@@ -14,11 +14,11 @@ pre{background:var(--card);padding:12px;border-radius:6px;overflow-x:auto;font-s
 .err{color:#d33}
 </style></head><body>
 <h1>Backbone Coordinate Converter</h1>
-<p>Cartesian (PDB) &harr; internal coordinates (&phi;, &psi;, &omega;, carbonyl O). Backbone atoms N, CA, C, O only.</p>
+<p>Cartesian (PDB) &harr; internal coordinates (&phi;, &psi;, &omega;, carbonyl O). Upload a file or paste text. Z-matrix modes handle all atoms; &phi;/&psi;/&omega; modes use backbone N, CA, C, O.</p>
 <div class="row">
- <select id="mode"><option value="int">PDB &rarr; &phi; &psi; &omega; table</option><option value="cart">&phi; &psi; &omega; table &rarr; PDB</option></select>
+ <select id="mode"><option value="int">PDB &rarr; &phi; &psi; &omega; table</option><option value="cart">&phi; &psi; &omega; table &rarr; PDB</option><option value="pdb2zm">PDB (all atoms) &rarr; Z-matrix (.in)</option><option value="zm2pdb">Z-matrix (.in) &rarr; PDB</option></select>
  <select id="preset"><option value="">Preset (for table mode)</option><option>helix</option><option>strand</option><option>ppii</option><option>extended</option></select>
- <button id="go">Convert</button><button id="dl" hidden>Download PDB</button>
+ <input type="file" id="file"><button id="go">Convert</button><button id="dl" hidden>Download PDB</button>
 </div>
 <textarea id="in" placeholder="Paste ATOM lines, or one 'phi psi omega' per line ('-' = blank)"></textarea>
 <p id="msg" class="err"></p><pre id="out"></pre>
@@ -62,4 +62,33 @@ else{const A=t.trim().split("\n").map(l=>{const p=l.replace(/,/g," ").trim().spl
 const pdb=toPDB(build(A));$("out").textContent=pdb;$("dl").hidden=false;$("dl").onclick=()=>{const a=document.createElement("a");
 a.href=URL.createObjectURL(new Blob([pdb]));a.download="backbone.pdb";a.click()}}}
 catch(e){$("msg").textContent=e.message;$("out").textContent=""}};
+
+const add3=(a,b)=>a.map((x,i)=>x+b[i]),el=n=>(n.match(/[A-Za-z]/)||["X"])[0];
+function parseZmat(t){const r=[];for(const l of t.split("\n")){const p=l.trim().split(/\s+/);if(p.length<10||!/^\d+$/.test(p[0]))continue;
+r.push({name:p[1],na:+p[4],nb:+p[5],nc:+p[6],r:+p[7],ang:+p[8],dih:+p[9]})}if(!r.length)throw Error("no Z-matrix rows found");return r}
+function zToCart(rows){const x=[];rows.forEach((z,i)=>{let p;if(i==0)p=[0,0,0];else if(i==1)p=[z.r,0,0];
+else if(i==2){const b=x[z.nb-1],c=x[z.na-1];p=place(add3(b,[0,1,0]),b,c,z.r,z.ang,0)}
+else p=place(x[z.nc-1],x[z.nb-1],x[z.na-1],z.r,z.ang,z.dih);x.push(p)});return x}
+function writePDB(names,xyz){return names.map((n,i)=>`ATOM  ${String(i+1).padStart(5)} ${n.length<4?" "+n.padEnd(3):n} UNK A${String(1).padStart(4)}    ${xyz[i].map(v=>v.toFixed(3).padStart(8)).join("")}  1.00  0.00           ${el(n).padStart(2)}`).join("\n")+"\nEND\n"}
+function parsePDBAll(t){const a=[];for(const l of t.split("\n")){if(l.startsWith("ENDMDL"))break;
+if((l.startsWith("ATOM  ")||l.startsWith("HETATM"))&&" A".includes(l[16]))a.push([l.slice(12,16).trim(),[+l.slice(30,38),+l.slice(38,46),+l.slice(46,54)]])}
+if(!a.length)throw Error("no ATOM records found");return a}
+function cartToZ(at){const P=at.map(a=>a[1]),rows=[];
+for(let i=0;i<at.length;i++){let na=-1,nb=-1,nc=-1,r=0,an=0,d=0;const rng=[...Array(i).keys()];
+if(i>=1)na=rng.reduce((m,j)=>dist(P[i],P[j])<dist(P[i],P[m])?j:m);
+if(i>=2)nb=rng.filter(j=>j!=na).reduce((m,j)=>dist(P[na],P[j])<dist(P[na],P[m])?j:m);
+if(i>=3){const c=rng.filter(j=>j!=na&&j!=nb).sort((p,q)=>dist(P[nb],P[p])-dist(P[nb],P[q]));
+nc=c.find(j=>{const g=ang(P[na],P[nb],P[j]);return g>10&&g<170})??c[0]}
+if(i>=1)r=dist(P[i],P[na]);if(i>=2)an=ang(P[i],P[na],P[nb]);if(i>=3)d=dih(P[i],P[na],P[nb],P[nc]);
+rows.push({name:at[i][0],na:na+1,nb:nb+1,nc:nc+1,r,ang:an,dih:d})}return rows}
+const fz=rows=>rows.map((z,i)=>String(i+1).padStart(4)+"  "+z.name.padEnd(5)+" "+el(z.name).padEnd(4)+"  M "+[z.na,z.nb,z.nc].map(v=>String(Math.max(v,0)).padStart(4)).join("")+" "+[z.r,z.ang,z.dih].map(v=>v.toFixed(3).padStart(9)).join(" ")+"  0.000000").join("\n")+"\n";
+function showDl(txt,fn){$("dl").hidden=false;$("dl").textContent="Download "+fn;$("dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([txt]));a.download=fn;a.click()}}
+const old=$("go").onclick;
+$("go").onclick=()=>{const m=$("mode").value;if(m=="int"||m=="cart"){$("dl").textContent="Download PDB";return old()}
+$("msg").textContent="";$("dl").hidden=true;
+try{const t=$("in").value;if(m=="zm2pdb"){const rows=parseZmat(t),x=zToCart(rows),k=rows.map((z,i)=>i).filter(i=>rows[i].name!="DUMM");
+const pdb=writePDB(k.map(i=>rows[i].name),k.map(i=>x[i]));$("out").textContent=pdb;showDl(pdb,"structure.pdb")}
+else{const z=fz(cartToZ(parsePDBAll(t)));$("out").textContent=z;showDl(z,"internal_coordinate.in")}}
+catch(e){$("msg").textContent=e.message;$("out").textContent=""}};
+$("file").onchange=e=>{const f=e.target.files[0];if(f)f.text().then(t=>{$("in").value=t;const n=f.name.toLowerCase();$("mode").value=n.endsWith(".pdb")?"pdb2zm":n.endsWith(".in")?"zm2pdb":$("mode").value})};
 </script></body></html>

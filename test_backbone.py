@@ -14,4 +14,4 @@ class T(unittest.TestCase):
     def test_mirror_sign(self):
         r = bb.build([(-57, -47, 180)] * 3)
         self.assertLess(bb.to_internal(r)[1]["phi"], 0)
-unittest.main()
+if __name__ == "__main__": unittest.main()
